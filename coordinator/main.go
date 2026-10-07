@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"distributed-build-system/scheduler"
@@ -102,6 +103,13 @@ func executeBuildOnWorker(
 		return shared.BuildResult{}, err
 	}
 
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return shared.BuildResult{}, fmt.Errorf(
+			"worker returned status %d",
+			response.StatusCode,
+		)
+	}
+
 	var result shared.BuildResult
 
 	err = json.Unmarshal(resultData, &result)
@@ -124,6 +132,16 @@ func buildHandler(w http.ResponseWriter, r *http.Request) {
 	err := json.NewDecoder(r.Body).Decode(&job)
 	if err != nil {
 		http.Error(w, "invalid build request", http.StatusBadRequest)
+		return
+	}
+
+	if job.ID == "" {
+		http.Error(w, "job ID is required", http.StatusBadRequest)
+		return
+	}
+
+	if job.Project == "" {
+		http.Error(w, "project is required", http.StatusBadRequest)
 		return
 	}
 
@@ -269,6 +287,182 @@ func cacheHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+func demoHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	job := shared.BuildJob{
+		ID:      fmt.Sprintf("demo-%d", time.Now().UnixNano()),
+		Project: "sample-project",
+		Status:  "queued",
+	}
+
+	fmt.Println()
+	fmt.Println("========== DEMO BUILD ==========")
+	fmt.Printf("Demo job: %s\n", job.ID)
+	fmt.Printf("Project: %s\n", job.Project)
+
+	cacheKey := generateCacheKey(job)
+
+	if cachedResult, found := buildCache.Get(cacheKey); found {
+		cachedResult.JobID = job.ID
+
+		fmt.Printf("Cache HIT for demo job %s\n", job.ID)
+		fmt.Println("================================")
+
+		response := map[string]interface{}{
+			"result": cachedResult,
+			"cache":  "HIT",
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+
+		return
+	}
+
+	fmt.Printf("Cache MISS for demo job %s\n", job.ID)
+
+	var result shared.BuildResult
+	var lastError error
+	var err error
+	var workerUsed string
+	var attempts int
+
+	for attempt := 1; attempt <= maxBuildAttempts; attempt++ {
+		attempts = attempt
+
+		worker := buildScheduler.GetAvailableWorker()
+
+		if worker == nil {
+			lastError = fmt.Errorf("no healthy workers available")
+
+			fmt.Printf(
+				"Attempt %d/%d: no healthy workers available\n",
+				attempt,
+				maxBuildAttempts,
+			)
+
+			break
+		}
+
+		workerUsed = worker.ID
+
+		fmt.Printf(
+			"Attempt %d/%d: assigning demo job %s to %s\n",
+			attempt,
+			maxBuildAttempts,
+			job.ID,
+			worker.ID,
+		)
+
+		result, err = executeBuildOnWorker(
+			worker,
+			job,
+		)
+
+		buildScheduler.ReleaseWorker(worker.ID)
+
+		if err != nil {
+			lastError = err
+
+			fmt.Printf(
+				"Demo attempt %d failed on %s: %v\n",
+				attempt,
+				worker.ID,
+				err,
+			)
+
+			buildScheduler.MarkWorkerUnhealthy(worker.ID)
+
+			fmt.Printf(
+				"Worker %s marked unhealthy\n",
+				worker.ID,
+			)
+
+			continue
+		}
+
+		fmt.Printf(
+			"Worker %s completed demo job %s successfully\n",
+			worker.ID,
+			job.ID,
+		)
+
+		lastError = nil
+		break
+	}
+
+	if lastError != nil {
+		fmt.Printf(
+			"Demo build failed after %d attempts: %v\n",
+			attempts,
+			lastError,
+		)
+
+		fmt.Println("================================")
+
+		http.Error(
+			w,
+			fmt.Sprintf(
+				"demo build failed: %v",
+				lastError,
+			),
+			http.StatusBadGateway,
+		)
+
+		return
+	}
+
+	if result.Success {
+		buildCache.Set(cacheKey, result)
+
+		fmt.Printf(
+			"Cached successful demo result for job %s\n",
+			job.ID,
+		)
+	}
+
+	fmt.Printf(
+		"Demo completed | Worker: %s | Attempts: %d | Cache: MISS\n",
+		workerUsed,
+		attempts,
+	)
+
+	fmt.Println("================================")
+
+	response := map[string]interface{}{
+		"result":       result,
+		"cache":        "MISS",
+		"worker":       workerUsed,
+		"attempts":     attempts,
+		"demo_project": "sample-project",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func demoPageHandler(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile("demo/index.html")
+
+	if err != nil {
+		http.Error(
+			w,
+			"demo interface unavailable",
+			http.StatusInternalServerError,
+		)
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	w.Write(data)
+}
+
 func main() {
 	http.HandleFunc("/register", registerWorkerHandler)
 	http.HandleFunc("/build", buildHandler)
@@ -276,7 +470,11 @@ func main() {
 	http.HandleFunc("/workers", workersHandler)
 	http.HandleFunc("/cache", cacheHandler)
 
+	http.HandleFunc("/demo/build", demoHandler)
+	http.HandleFunc("/demo", demoPageHandler)
+
 	fmt.Println("Coordinator started on http://localhost:8080")
+	fmt.Println("Demo available at http://localhost:8080/demo")
 
 	err := http.ListenAndServe(":8080", nil)
 
