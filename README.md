@@ -41,7 +41,25 @@ The system accepts build jobs through a central coordinator, schedules them acro
              │            │ │            │ │            │
              │ Go Build   │ │ Go Build   │ │ Go Build   │
              └────────────┘ └────────────┘ └────────────┘
+## Demo
 
+### Worker Health
+
+Three workers registered successfully with the coordinator.
+
+![Worker Health](docs/screenshots/worker-health.png)
+
+### Scheduling and Caching
+
+The scheduler distributes builds across workers while cached projects are served without another worker execution.
+
+![Scheduling and Cache](docs/screenshots/scheduling-cache.png)
+
+### Failure Recovery
+
+When a worker becomes unavailable, the coordinator retries the build using another healthy worker.
+
+![Worker Failover](docs/screenshots/failover.png)
 Key Features
 - Distributed build execution using multiple workers
 - Round-robin worker scheduling
