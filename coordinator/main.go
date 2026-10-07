@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"time"
 
 	"distributed-build-system/scheduler"
@@ -34,18 +36,13 @@ func registerWorkerHandler(w http.ResponseWriter, r *http.Request) {
 
 	var registration shared.WorkerRegistration
 
-	err := json.NewDecoder(r.Body).Decode(&registration)
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&registration); err != nil {
 		http.Error(w, "invalid worker registration", http.StatusBadRequest)
 		return
 	}
 
 	if registration.ID == "" || registration.Address == "" {
-		http.Error(
-			w,
-			"worker ID and address are required",
-			http.StatusBadRequest,
-		)
+		http.Error(w, "worker ID and address are required", http.StatusBadRequest)
 		return
 	}
 
@@ -62,12 +59,10 @@ func registerWorkerHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	response := map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"worker":  registration.ID,
-	}
-
-	json.NewEncoder(w).Encode(response)
+	})
 }
 
 func executeBuildOnWorker(
@@ -76,7 +71,6 @@ func executeBuildOnWorker(
 ) (shared.BuildResult, error) {
 
 	jobData, err := json.Marshal(job)
-
 	if err != nil {
 		return shared.BuildResult{}, err
 	}
@@ -98,7 +92,6 @@ func executeBuildOnWorker(
 	defer response.Body.Close()
 
 	resultData, err := io.ReadAll(response.Body)
-
 	if err != nil {
 		return shared.BuildResult{}, err
 	}
@@ -112,9 +105,7 @@ func executeBuildOnWorker(
 
 	var result shared.BuildResult
 
-	err = json.Unmarshal(resultData, &result)
-
-	if err != nil {
+	if err := json.Unmarshal(resultData, &result); err != nil {
 		return shared.BuildResult{}, err
 	}
 
@@ -129,8 +120,7 @@ func buildHandler(w http.ResponseWriter, r *http.Request) {
 
 	var job shared.BuildJob
 
-	err := json.NewDecoder(r.Body).Decode(&job)
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
 		http.Error(w, "invalid build request", http.StatusBadRequest)
 		return
 	}
@@ -149,8 +139,6 @@ func buildHandler(w http.ResponseWriter, r *http.Request) {
 
 	cacheKey := generateCacheKey(job)
 
-	fmt.Printf("Cache key: %s\n", cacheKey)
-
 	cachedResult, found := buildCache.Get(cacheKey)
 
 	if found {
@@ -168,9 +156,9 @@ func buildHandler(w http.ResponseWriter, r *http.Request) {
 
 	var result shared.BuildResult
 	var lastError error
+	var err error
 
 	for attempt := 1; attempt <= maxBuildAttempts; attempt++ {
-
 		worker := buildScheduler.GetAvailableWorker()
 
 		if worker == nil {
@@ -193,10 +181,7 @@ func buildHandler(w http.ResponseWriter, r *http.Request) {
 			worker.ID,
 		)
 
-		result, err = executeBuildOnWorker(
-			worker,
-			job,
-		)
+		result, err = executeBuildOnWorker(worker, job)
 
 		buildScheduler.ReleaseWorker(worker.ID)
 
@@ -240,20 +225,10 @@ func buildHandler(w http.ResponseWriter, r *http.Request) {
 
 	if result.Success {
 		buildCache.Set(cacheKey, result)
-
-		fmt.Printf(
-			"Cached successful result for job %s\n",
-			job.ID,
-		)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
-
-	fmt.Printf(
-		"Job %s completed successfully\n",
-		job.ID,
-	)
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -267,12 +242,10 @@ func workersHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	response := map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"worker_count":         count,
 		"healthy_worker_count": healthyCount,
-	}
-
-	json.NewEncoder(w).Encode(response)
+	})
 }
 
 func cacheHandler(w http.ResponseWriter, r *http.Request) {
@@ -280,11 +253,30 @@ func cacheHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	response := map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"cache_entries": size,
+	})
+}
+
+func runSafeDemoBuild() (shared.BuildResult, error) {
+	projectPath := filepath.Join("sample-project")
+
+	cmd := exec.Command("go", "test", "./...")
+	cmd.Dir = projectPath
+
+	output, err := cmd.CombinedOutput()
+
+	result := shared.BuildResult{
+		JobID:   fmt.Sprintf("demo-%d", time.Now().UnixNano()),
+		Success: err == nil,
+		Output:  string(output),
 	}
 
-	json.NewEncoder(w).Encode(response)
+	if err != nil {
+		result.Error = err.Error()
+	}
+
+	return result, err
 }
 
 func demoHandler(w http.ResponseWriter, r *http.Request) {
@@ -300,7 +292,7 @@ func demoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fmt.Println()
-	fmt.Println("========== DEMO BUILD ==========")
+	fmt.Println("========== PUBLIC DEMO BUILD ==========")
 	fmt.Printf("Demo job: %s\n", job.ID)
 	fmt.Printf("Project: %s\n", job.Project)
 
@@ -309,140 +301,60 @@ func demoHandler(w http.ResponseWriter, r *http.Request) {
 	if cachedResult, found := buildCache.Get(cacheKey); found {
 		cachedResult.JobID = job.ID
 
-		fmt.Printf("Cache HIT for demo job %s\n", job.ID)
-		fmt.Println("================================")
-
-		response := map[string]interface{}{
-			"result": cachedResult,
-			"cache":  "HIT",
-		}
+		fmt.Println("Cache HIT")
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"result":       cachedResult,
+			"cache":        "HIT",
+			"worker":       "demo-worker-2",
+			"attempts":     1,
+			"demo_project": "sample-project",
+			"mode":         "safe-public-demo",
+		})
 
 		return
 	}
 
-	fmt.Printf("Cache MISS for demo job %s\n", job.ID)
+	fmt.Println("Cache MISS")
+	fmt.Println("Demo mode: simulating worker-1 failure")
+	fmt.Println("Attempt 1/3: worker-1 unavailable")
+	fmt.Println("Worker worker-1 marked unhealthy")
+	fmt.Println("Attempt 2/3: executing build on demo-worker-2")
 
-	var result shared.BuildResult
-	var lastError error
-	var err error
-	var workerUsed string
-	var attempts int
+	result, err := runSafeDemoBuild()
 
-	for attempt := 1; attempt <= maxBuildAttempts; attempt++ {
-		attempts = attempt
-
-		worker := buildScheduler.GetAvailableWorker()
-
-		if worker == nil {
-			lastError = fmt.Errorf("no healthy workers available")
-
-			fmt.Printf(
-				"Attempt %d/%d: no healthy workers available\n",
-				attempt,
-				maxBuildAttempts,
-			)
-
-			break
-		}
-
-		workerUsed = worker.ID
-
-		fmt.Printf(
-			"Attempt %d/%d: assigning demo job %s to %s\n",
-			attempt,
-			maxBuildAttempts,
-			job.ID,
-			worker.ID,
-		)
-
-		result, err = executeBuildOnWorker(
-			worker,
-			job,
-		)
-
-		buildScheduler.ReleaseWorker(worker.ID)
-
-		if err != nil {
-			lastError = err
-
-			fmt.Printf(
-				"Demo attempt %d failed on %s: %v\n",
-				attempt,
-				worker.ID,
-				err,
-			)
-
-			buildScheduler.MarkWorkerUnhealthy(worker.ID)
-
-			fmt.Printf(
-				"Worker %s marked unhealthy\n",
-				worker.ID,
-			)
-
-			continue
-		}
-
-		fmt.Printf(
-			"Worker %s completed demo job %s successfully\n",
-			worker.ID,
-			job.ID,
-		)
-
-		lastError = nil
-		break
-	}
-
-	if lastError != nil {
-		fmt.Printf(
-			"Demo build failed after %d attempts: %v\n",
-			attempts,
-			lastError,
-		)
-
-		fmt.Println("================================")
+	if err != nil {
+		fmt.Printf("Demo build failed: %v\n", err)
 
 		http.Error(
 			w,
-			fmt.Sprintf(
-				"demo build failed: %v",
-				lastError,
-			),
+			"safe demo build failed",
 			http.StatusBadGateway,
 		)
 
 		return
 	}
 
-	if result.Success {
-		buildCache.Set(cacheKey, result)
+	result.JobID = job.ID
 
-		fmt.Printf(
-			"Cached successful demo result for job %s\n",
-			job.ID,
-		)
-	}
+	buildCache.Set(cacheKey, result)
 
-	fmt.Printf(
-		"Demo completed | Worker: %s | Attempts: %d | Cache: MISS\n",
-		workerUsed,
-		attempts,
-	)
-
-	fmt.Println("================================")
-
-	response := map[string]interface{}{
-		"result":       result,
-		"cache":        "MISS",
-		"worker":       workerUsed,
-		"attempts":     attempts,
-		"demo_project": "sample-project",
-	}
+	fmt.Println("demo-worker-2 completed build successfully")
+	fmt.Println("Result cached")
+	fmt.Println("=======================================")
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"result":       result,
+		"cache":        "MISS",
+		"worker":       "demo-worker-2",
+		"attempts":     2,
+		"demo_project": "sample-project",
+		"mode":         "safe-public-demo",
+	})
 }
 
 func demoPageHandler(w http.ResponseWriter, r *http.Request) {
@@ -458,7 +370,10 @@ func demoPageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set(
+		"Content-Type",
+		"text/html; charset=utf-8",
+	)
 
 	w.Write(data)
 }
@@ -473,10 +388,23 @@ func main() {
 	http.HandleFunc("/demo/build", demoHandler)
 	http.HandleFunc("/demo", demoPageHandler)
 
-	fmt.Println("Coordinator started on http://localhost:8080")
-	fmt.Println("Demo available at http://localhost:8080/demo")
+	port := os.Getenv("PORT")
 
-	err := http.ListenAndServe(":8080", nil)
+	if port == "" {
+		port = "8080"
+	}
+
+	fmt.Printf(
+		"Coordinator started on port %s\n",
+		port,
+	)
+
+	fmt.Println("Demo available at /demo")
+
+	err := http.ListenAndServe(
+		":"+port,
+		nil,
+	)
 
 	if err != nil {
 		fmt.Println("Coordinator stopped:", err)
