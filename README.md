@@ -11,6 +11,7 @@ The system accepts build jobs through a central coordinator, schedules them acro
 
 
 \## Architecture
+![Distributed Build System Architecture](docs/architecture.png)
 
 
 
