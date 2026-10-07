@@ -85,16 +85,16 @@ Developer / Client
          ▼
    Build Execution
 ```
-
-##Demo
-###Worker Pool
+---
+## Demo
+### Worker Pool
 Three independent workers register with the Coordinator and become
 available for build execution.
 <p align="center">
   <img src="docs/screenshots/worker-health.png" alt="Worker Health" width="850">
 </p>
 
-###Scheduling & Caching
+### Scheduling & Caching
 Build requests are distributed across workers using round-robin
 scheduling.
 Successful builds are cached so repeated requests for the same project
@@ -103,7 +103,7 @@ can return immediately without another worker execution.
   <img src="docs/screenshots/scheduling-cache.png" alt="Scheduling and Cache" width="850">
 </p>
 
-###Failure Recovery
+### Failure Recovery
 When a worker becomes unavailable, the Coordinator detects the failed
 request, marks the worker unhealthy, retries the build, and routes the
 job to another healthy worker.
@@ -111,7 +111,7 @@ job to another healthy worker.
   <img src="docs/screenshots/failover.png" alt="Worker Failover" width="850">
 </p>
 
-##Core Components
+## Core Components
 Component	Responsibility
 Coordinator	Receives build requests and orchestrates execution
 Scheduler	Selects available healthy workers
@@ -120,8 +120,8 @@ Build Cache	Stores successful build results
 Shared Models	Defines communication structures between components
 
 
-##Key Features
-Distributed Build Execution
+## Key Features
+### Distributed Build Execution
 Build jobs are executed by independent worker processes instead of
 running directly inside the Coordinator.
 Round-Robin Scheduling
@@ -132,7 +132,7 @@ Job 2 ──► Worker 2
 Job 3 ──► Worker 3
 Job 4 ──► Worker 1
 
-##Thread-Safe Build Cache
+### Thread-Safe Build Cache
 The Coordinator uses an in-memory cache protected by sync.RWMutex.
 Build Request
       │
@@ -147,7 +147,7 @@ Result   Scheduler
             ▼
           Worker
 
-##SHA-256 Cache Keys
+### SHA-256 Cache Keys
 Cache keys are generated using SHA-256 from the project input, allowing
 different job IDs for the same project to reuse cached results.
 Worker Health Tracking
@@ -251,7 +251,7 @@ Example:
   "cache_entries": 1
 }
 
-##Testing
+## Testing
 Run the complete test suite:
 go test ./...
 
@@ -314,7 +314,7 @@ Reliability Model
                                    ▼
                                 Success
 
-##Project Structure
+## Project Structure
 distributed-build-system/
 │
 ├── coordinator/
@@ -350,7 +350,7 @@ distributed-build-system/
 ├── README.md
 └── go.mod
 
-##Engineering Decisions
+## Engineering Decisions
 Why Go?
 Go provides lightweight concurrency, strong standard-library HTTP
 support, fast compilation, and straightforward deployment.
